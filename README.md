@@ -84,3 +84,4 @@ be treated as proof that a construction is a valid quantum code.
    peak-memory/device metrics.
 3. Expand the rewrite system and beam-search planner, then add `opt_einsum` and
    optional `cotengra`/cuTensorNet adapters plus representative benchmarks.
+# tensorcontract
