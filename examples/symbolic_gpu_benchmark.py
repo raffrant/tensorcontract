@@ -30,10 +30,12 @@ def main() -> None:
         peak = "n/a (CPU)" if record.measured_peak_device_bytes is None else str(record.measured_peak_device_bytes)
         print(
             f"{record.ordering:9s} median={record.median_seconds * 1e3:9.4f} ms "
+            f"speedup_vs_adverse={report.speedup(record.ordering):6.2f}x "
             f"flops={record.estimated_flops:9d} peak_elements={record.peak_intermediate_elements:8d} "
             f"GPU_peak_bytes={peak} error={record.absolute_error_vs_numpy:.3e}"
         )
         print("  order:", " -> ".join(record.step_order))
+        print("  intermediate elements:", " -> ".join(f"{size:,}" for size in record.intermediate_elements))
     print("\nDisplaying Matplotlib benchmark figure (no files are written).")
     plot_benchmark(report)
 

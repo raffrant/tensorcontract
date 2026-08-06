@@ -70,6 +70,14 @@ measurement and report peak allocated device memory. The interactive chart is
 explicitly labeled when CUDA is unavailable and writes no PNG or JSON files.
 Numerical results are checked against the NumPy backend.
 
+The live figure compares the exact contraction sequence and every intermediate
+size for the same graph. At dimension 8, the planner orders first contract
+factors sharing two variables and peak at 4,096 elements. The included adverse
+order first contracts factors sharing only one variable and peaks at 32,768
+elements. On the development CPU, 10 warmups and 100 repetitions showed roughly
+a 2× speedup for the planner orders; this is a local observation, not a portable
+CPU or GPU performance claim.
+
 ## Implemented
 
 - Typed named-index/hyperedge IR and tensor kinds for dense, diagonal, sparse,

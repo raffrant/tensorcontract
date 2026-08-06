@@ -20,6 +20,7 @@ from .torch_backend import execute_torch, resolve_device
 class OrderingBenchmark:
     ordering: str
     step_order: tuple[str, ...]
+    intermediate_elements: tuple[int, ...]
     median_seconds: float
     minimum_seconds: float
     estimated_flops: int
@@ -41,6 +42,13 @@ class SymbolicBenchmarkReport:
     repeats: int
     symbolic_expressions: dict[str, str]
     orderings: tuple[OrderingBenchmark, ...]
+
+    def speedup(self, ordering: str, baseline: str = "adverse") -> float:
+        """Return baseline median time divided by the requested median time."""
+        records = {record.ordering: record for record in self.orderings}
+        if ordering not in records or baseline not in records:
+            raise KeyError(f"unknown ordering or baseline: {ordering!r}, {baseline!r}")
+        return records[baseline].median_seconds / records[ordering].median_seconds
 
 def benchmark_orderings(
     symbolic: SymbolicNetwork,
@@ -89,6 +97,7 @@ def benchmark_orderings(
         records.append(OrderingBenchmark(
             plan.name,
             tuple(f"{step.left}×{step.right}" for step in plan.steps),
+            tuple(step.output_elements for step in plan.steps),
             median(samples),
             min(samples),
             plan.total_flops,

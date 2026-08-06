@@ -32,6 +32,8 @@ def test_all_benchmark_orders_match_numpy_on_cpu() -> None:
     adverse = next(record for record in report.orderings if record.ordering == "adverse")
     best_peak = min(record.peak_intermediate_elements for record in report.orderings)
     assert adverse.peak_intermediate_elements > best_peak
+    assert report.speedup("adverse") == pytest.approx(1.0)
+    assert report.speedup("flops") == pytest.approx(adverse.median_seconds / report.orderings[0].median_seconds)
 
 
 def test_explicit_order_validation_and_torch_execution() -> None:
@@ -47,4 +49,4 @@ def test_explicit_order_validation_and_torch_execution() -> None:
 def test_plot_can_be_built_without_writing_or_showing() -> None:
     report = benchmark_orderings(build_complete_five_node_network(2, 3), "cpu", warmup=0, repeats=1)
     figure = plot_benchmark(report, show=False)
-    assert len(figure.axes) == 2
+    assert len(figure.axes) == 3
