@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 
 from tensorcontract.symbolics.benchmark import benchmark_orderings
 from tensorcontract.symbolics.model import build_complete_five_node_network
@@ -17,14 +16,10 @@ def main() -> None:
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--warmup", type=int, default=3)
     parser.add_argument("--repeats", type=int, default=20)
-    parser.add_argument("--output-dir", type=Path, default=Path("benchmarks/symbolics"))
     arguments = parser.parse_args()
 
     symbolic = build_complete_five_node_network(arguments.dimension, arguments.seed)
     report = benchmark_orderings(symbolic, arguments.device, arguments.warmup, arguments.repeats)
-    arguments.output_dir.mkdir(parents=True, exist_ok=True)
-    report.write_json(arguments.output_dir / "five-node-orderings.json")
-    plot_benchmark(report, arguments.output_dir / "five-node-orderings.png")
 
     print(f"device={report.device} cuda_available={report.cuda_available}")
     print("All five symbolic nodes pairwise interact:", symbolic.is_fully_connected)
@@ -39,8 +34,8 @@ def main() -> None:
             f"GPU_peak_bytes={peak} error={record.absolute_error_vs_numpy:.3e}"
         )
         print("  order:", " -> ".join(record.step_order))
-    print(f"\nWrote {arguments.output_dir / 'five-node-orderings.json'}")
-    print(f"Wrote {arguments.output_dir / 'five-node-orderings.png'}")
+    print("\nDisplaying Matplotlib benchmark figure (no files are written).")
+    plot_benchmark(report)
 
 
 if __name__ == "__main__":

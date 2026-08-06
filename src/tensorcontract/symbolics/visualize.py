@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.figure import Figure
 
 from .benchmark import SymbolicBenchmarkReport
 
 
-def plot_benchmark(report: SymbolicBenchmarkReport, path: str | Path) -> None:
+def plot_benchmark(report: SymbolicBenchmarkReport, *, show: bool = True) -> Figure:
+    """Build the benchmark figure and optionally show it without saving."""
     names = [record.ordering for record in report.orderings]
     x = np.arange(len(names))
     times_ms = [record.median_seconds * 1e3 for record in report.orderings]
@@ -45,5 +45,6 @@ def plot_benchmark(report: SymbolicBenchmarkReport, path: str | Path) -> None:
     suffix = "CUDA synchronized; peak device allocation measured" if report.device.startswith("cuda") else "CUDA unavailable; explicitly labeled CPU fallback"
     figure.suptitle(f"Five-node symbolic tensor network · {suffix}", color=text, fontsize=13)
     figure.tight_layout()
-    figure.savefig(path, dpi=180, bbox_inches="tight", facecolor=dark)
-    plt.close(figure)
+    if show:
+        plt.show()
+    return figure

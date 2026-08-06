@@ -6,6 +6,7 @@ from tensorcontract.planner import PlanConstraints, build_ordered_plan, plan_con
 from tensorcontract.symbolics.benchmark import benchmark_orderings
 from tensorcontract.symbolics.model import build_complete_five_node_network
 from tensorcontract.symbolics.torch_backend import execute_torch
+from tensorcontract.symbolics.visualize import plot_benchmark
 
 
 def test_five_rank_three_nodes_induce_complete_interaction_graph() -> None:
@@ -41,3 +42,9 @@ def test_explicit_order_validation_and_torch_execution() -> None:
     assert np.allclose(actual.value, expected)
     with pytest.raises(ValueError):
         build_ordered_plan(network, (("missing", "f0"),))
+
+
+def test_plot_can_be_built_without_writing_or_showing() -> None:
+    report = benchmark_orderings(build_complete_five_node_network(2, 3), "cpu", warmup=0, repeats=1)
+    figure = plot_benchmark(report, show=False)
+    assert len(figure.axes) == 2

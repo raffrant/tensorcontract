@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-import json
-from pathlib import Path
+from dataclasses import dataclass
 from statistics import median
 from time import perf_counter
 
@@ -43,10 +41,6 @@ class SymbolicBenchmarkReport:
     repeats: int
     symbolic_expressions: dict[str, str]
     orderings: tuple[OrderingBenchmark, ...]
-
-    def write_json(self, path: str | Path) -> None:
-        Path(path).write_text(json.dumps(asdict(self), indent=2), encoding="utf-8")
-
 
 def benchmark_orderings(
     symbolic: SymbolicNetwork,

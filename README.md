@@ -56,11 +56,7 @@ of nodes interact, producing a complete five-node interaction graph. The
 expressions are evaluated on a finite grid and then contracted sequentially by
 PyTorch using several explicit orders.
 
-<p align="center">
-  <img src="benchmarks/symbolics/five-node-orderings.png" alt="Five-node symbolic tensor contraction ordering benchmark" width="900">
-</p>
-
-Reproduce the JSON report and chart with automatic CUDA selection:
+Display the Matplotlib report with automatic CUDA selection:
 
 ```bash
 PYTHONPATH=src python3 examples/symbolic_gpu_benchmark.py \
@@ -70,9 +66,9 @@ PYTHONPATH=src python3 examples/symbolic_gpu_benchmark.py \
 Use `--device cuda` to require a GPU and fail rather than fall back. SymPy
 construction and grid evaluation happen on CPU; the materialized tensor
 contractions run on the selected PyTorch device. CUDA runs synchronize each
-measurement and report peak allocated device memory. The checked-in chart was
-generated on a machine where CUDA was unavailable and is explicitly labeled as
-a CPU fallback. Numerical results are checked against the NumPy backend.
+measurement and report peak allocated device memory. The interactive chart is
+explicitly labeled when CUDA is unavailable and writes no PNG or JSON files.
+Numerical results are checked against the NumPy backend.
 
 ## Implemented
 
