@@ -48,6 +48,32 @@ PYTHONPATH=src python3 examples/generate_visualizations.py
 The timing panel reports five local CPU runs per point and must not be treated
 as a cross-machine benchmark. FLOPs and peak elements are planner estimates.
 
+## Symbolic tensor-network ordering benchmark
+
+The `tensorcontract.symbolics` package builds five reproducible random SymPy
+functions, each with three variables. Cyclic variable triples make every pair
+of nodes interact, producing a complete five-node interaction graph. The
+expressions are evaluated on a finite grid and then contracted sequentially by
+PyTorch using several explicit orders.
+
+<p align="center">
+  <img src="benchmarks/symbolics/five-node-orderings.png" alt="Five-node symbolic tensor contraction ordering benchmark" width="900">
+</p>
+
+Reproduce the JSON report and chart with automatic CUDA selection:
+
+```bash
+PYTHONPATH=src python3 examples/symbolic_gpu_benchmark.py \
+  --device auto --dimension 8 --warmup 3 --repeats 20
+```
+
+Use `--device cuda` to require a GPU and fail rather than fall back. SymPy
+construction and grid evaluation happen on CPU; the materialized tensor
+contractions run on the selected PyTorch device. CUDA runs synchronize each
+measurement and report peak allocated device memory. The checked-in chart was
+generated on a machine where CUDA was unavailable and is explicitly labeled as
+a CPU fallback. Numerical results are checked against the NumPy backend.
+
 ## Implemented
 
 - Typed named-index/hyperedge IR and tensor kinds for dense, diagonal, sparse,

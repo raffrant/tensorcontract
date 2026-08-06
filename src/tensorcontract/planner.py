@@ -129,3 +129,38 @@ def plan_contraction(network: TensorNetwork, constraints: PlanConstraints) -> Pl
     candidates = tuple(_greedy(network, constraints, mode) for mode in ("flops", "memory", "balanced"))
     selected = min(candidates, key=lambda p: (p.score, p.total_flops, p.peak_elements, p.name))
     return PlanningResult(selected, candidates, perf_counter() - started)
+
+
+def build_ordered_plan(
+    network: TensorNetwork,
+    pairs: tuple[tuple[str, str], ...],
+    name: str = "explicit",
+    constraints: PlanConstraints | None = None,
+) -> ContractionPlan:
+    """Build and cost a user-specified pairwise order.
+
+    Generated intermediates are named ``_t0``, ``_t1``, and so forth, making
+    later pairs deterministic and serializable.
+    """
+    configured = constraints or PlanConstraints()
+    live = {node_name: node.indices for node_name, node in network.nodes.items()}
+    steps: list[ContractionStep] = []
+    peak = max((prod(network.indices[i].dimension for i in set(v)) for v in live.values()), default=1)
+    for number, (left, right) in enumerate(pairs):
+        if left == right or left not in live or right not in live:
+            raise ValueError(f"invalid explicit pair {(left, right)!r} at step {number}; live={sorted(live)}")
+        step = _step(network, live, left, right, number, configured.precision_bytes)
+        if configured.max_intermediate_elements is not None and step.output_elements > configured.max_intermediate_elements:
+            raise MemoryError(f"step {number} exceeds max_intermediate_elements")
+        if configured.max_memory_bytes is not None and step.output_elements * configured.precision_bytes > configured.max_memory_bytes:
+            raise MemoryError(f"step {number} exceeds max_memory_bytes")
+        del live[left], live[right]
+        live[step.output] = step.output_indices
+        steps.append(step)
+        peak = max(peak, step.output_elements)
+    if len(live) != 1:
+        raise ValueError(f"explicit order is incomplete; live={sorted(live)}")
+    flops = sum(step.flops for step in steps)
+    moved = sum(step.bytes_moved for step in steps)
+    score = configured.objective_flops_weight * flops + configured.objective_memory_weight * peak
+    return ContractionPlan(name, tuple(steps), flops, peak, moved, score, configured.exact)

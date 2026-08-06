@@ -7,7 +7,7 @@ name = "tensorcontract"
 version = "0.1.0"
 description = "Hardware-aware tensor-network planning and QEC graph rewrites"
 requires-python = ">=3.10"
-dependencies = ["numpy>=1.23"]
+dependencies = ["numpy>=1.23", "sympy>=1.11"]
 
 [project.optional-dependencies]
 torch = ["torch>=2"]
