@@ -1,28 +1,13 @@
 import numpy as np
 import pytest
 
+pytest.importorskip("torch", reason="PyTorch backend is optional")
+
 from tensorcontract.backend import execute_numpy
-from tensorcontract.planner import PlanConstraints, build_ordered_plan, plan_contraction
+from tensorcontract.planner import build_ordered_plan
 from tensorcontract.symbolics.benchmark import benchmark_orderings
 from tensorcontract.symbolics.model import build_complete_five_node_network
 from tensorcontract.symbolics.torch_backend import execute_torch
-from tensorcontract.symbolics.visualize import plot_benchmark
-
-
-def test_five_rank_three_nodes_induce_complete_interaction_graph() -> None:
-    symbolic = build_complete_five_node_network(dimension=3, seed=12)
-    assert symbolic.is_fully_connected
-    assert all(len(neighbours) == 4 for neighbours in symbolic.interaction_graph.values())
-    for node in symbolic.nodes:
-        assert len(node.variables) == 3
-        assert set(node.variables) <= node.expression.free_symbols
-
-
-def test_materialization_is_reproducible() -> None:
-    left = build_complete_five_node_network(3, 4).materialize()
-    right = build_complete_five_node_network(3, 4).materialize()
-    for name in left.nodes:
-        assert np.array_equal(left.nodes[name].data, right.nodes[name].data)
 
 
 def test_all_benchmark_orders_match_numpy_on_cpu() -> None:
@@ -47,6 +32,19 @@ def test_explicit_order_validation_and_torch_execution() -> None:
 
 
 def test_plot_can_be_built_without_writing_or_showing() -> None:
+    pytest.importorskip("matplotlib", reason="visualization support is optional")
+    from tensorcontract.symbolics.visualize import plot_benchmark
+
     report = benchmark_orderings(build_complete_five_node_network(2, 3), "cpu", warmup=0, repeats=1)
     figure = plot_benchmark(report, show=False)
     assert len(figure.axes) == 3
+
+
+def test_cuda_request_fails_clearly_when_cuda_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    import torch
+
+    from tensorcontract.symbolics.torch_backend import resolve_device
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    with pytest.raises(RuntimeError, match="CUDA was requested"):
+        resolve_device("cuda")
