@@ -17,6 +17,10 @@ class BackendNotFoundError(BackendError):
     """Raised when a requested backend is not registered."""
 
 
+class BackendUnavailableError(BackendError):
+    """Raised when a registered optional backend cannot be imported or used."""
+
+
 class BackendExecutionError(BackendError):
     """A runtime failure annotated with its operation and dependencies."""
 

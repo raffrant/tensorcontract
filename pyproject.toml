@@ -11,6 +11,7 @@ dependencies = ["numpy>=1.23", "sympy>=1.11"]
 
 [project.optional-dependencies]
 torch = ["torch>=2"]
+triton = ["torch>=2", "triton>=3"]
 test = ["pytest>=7"]
 planning = ["opt_einsum>=3.3", "cotengra>=0.6"]
 visualization = ["matplotlib>=3.6"]

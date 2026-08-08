@@ -22,12 +22,26 @@ from tensorcontract.symbolics.ir import (
 )
 
 from .base import BackendExecutionError
+from .lowering import recognize_batched_matmul
 
 
 class NumPyBackend:
     """Correctness-oriented interpreter for the current symbolic IR."""
 
     name = "numpy"
+
+    def __init__(self, *, enable_batched_matmul: bool = True) -> None:
+        self.enable_batched_matmul = enable_batched_matmul
+
+    def contraction_implementation(
+        self,
+        graph: SymbolicGraph,
+        operation: ContractionNode,
+    ) -> str:
+        """Return the selected eager implementation for debugging."""
+        if self.enable_batched_matmul and recognize_batched_matmul(graph, operation):
+            return "batched-matmul"
+        return "einsum"
 
     def execute_all(
         self,
@@ -109,12 +123,21 @@ class NumPyBackend:
             values[name] = value
         return values
 
-    @staticmethod
     def _contraction(
+        self,
         graph: SymbolicGraph,
         operation: ContractionNode,
         values: Mapping[str, NDArray[np.generic]],
     ) -> NDArray[np.generic]:
+        lowering = (
+            recognize_batched_matmul(graph, operation)
+            if self.enable_batched_matmul
+            else None
+        )
+        if lowering is not None:
+            return np.asarray(
+                np.matmul(values[lowering.left], values[lowering.right])
+            )
         signatures = tuple(graph.value_indices(name) for name in operation.inputs)
         names = tuple(dict.fromkeys(index for signature in signatures for index in signature))
         labels = {name: position for position, name in enumerate(names)}

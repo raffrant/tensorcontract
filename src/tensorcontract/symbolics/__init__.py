@@ -33,6 +33,16 @@ from .planner import (
     SymbolicPlanningError,
     plan_symbolic_contractions,
 )
+from .cache import (
+    ExecutionPlanCacheKey,
+    InMemoryPlanCache,
+    IncompatibleBindingError,
+    PlanCacheError,
+    PlanCacheInfo,
+    PlanCacheResult,
+    TensorBindingSignature,
+    make_execution_plan_cache_key,
+)
 
 
 def execute_symbolic_numpy(
@@ -60,12 +70,18 @@ __all__ = [
     "DimensionMismatchError",
     "ElementwiseKind",
     "ElementwiseNode",
+    "ExecutionPlanCacheKey",
+    "InMemoryPlanCache",
+    "IncompatibleBindingError",
     "IndexRole",
     "InvalidSymbolicGraphError",
     "InvalidOperationError",
     "MissingIndexError",
     "MissingValueError",
     "PlanningUnavailableError",
+    "PlanCacheError",
+    "PlanCacheInfo",
+    "PlanCacheResult",
     "ReductionNode",
     "RepeatedIndexError",
     "SymbolicGraph",
@@ -80,8 +96,10 @@ __all__ = [
     "SymbolicTensor",
     "SymbolicValidationError",
     "TransposeNode",
+    "TensorBindingSignature",
     "build_complete_five_node_network",
     "execute_symbolic_numpy",
     "execute_symbolic_numpy_all",
+    "make_execution_plan_cache_key",
     "plan_symbolic_contractions",
 ]

@@ -13,10 +13,12 @@ import pytest
 from tensorcontract.backends import (
     BackendExecutionError,
     BackendNotFoundError,
+    BackendUnavailableError,
     ExecutionBackend,
     NumPyBackend,
     available_backends,
     get_backend,
+    is_backend_available,
 )
 from tensorcontract.symbolics import (
     ContractionNode,
@@ -59,8 +61,36 @@ def test_numpy_backend_satisfies_protocol_and_registry_is_deterministic() -> Non
     assert isinstance(backend, NumPyBackend)
     assert backend.name == "numpy"
     assert available_backends() == ("numpy",)
+    assert is_backend_available("numpy")
+    assert not is_backend_available("missing")
     with pytest.raises(BackendNotFoundError, match="available backends.*numpy"):
         get_backend("missing")
+
+
+def test_unavailable_optional_backend_fails_without_affecting_numpy(monkeypatch: pytest.MonkeyPatch) -> None:
+    import tensorcontract.backends as registry
+
+    def unavailable(name: str, package: str | None = None):
+        raise ModuleNotFoundError("torch deliberately unavailable")
+
+    monkeypatch.setattr(registry, "import_module", unavailable)
+    with pytest.raises(BackendUnavailableError, match=r"install tensorcontract\[torch\]"):
+        registry.get_backend("torch")
+    assert isinstance(registry.get_backend("numpy"), NumPyBackend)
+
+
+def test_unavailable_triton_backend_fails_without_affecting_numpy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import tensorcontract.backends as registry
+
+    def unavailable(name: str, package: str | None = None):
+        raise ModuleNotFoundError("triton deliberately unavailable")
+
+    monkeypatch.setattr(registry, "import_module", unavailable)
+    with pytest.raises(BackendUnavailableError, match=r"tensorcontract\[triton\]"):
+        registry.get_backend("triton")
+    assert isinstance(registry.get_backend("numpy"), NumPyBackend)
 
 
 def test_numpy_backend_executes_every_supported_operation() -> None:
