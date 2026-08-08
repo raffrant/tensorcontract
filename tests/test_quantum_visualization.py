@@ -15,16 +15,19 @@ from matplotlib.axes import Axes
 
 from tensorcontract.quantum.visualization import (
     EXPORT_COLUMNS,
+    PERFORMANCE_COLUMNS,
     ErrorWeightSeries,
     LogicalPosteriorPlotResult,
     SyndromeDistributionResult,
     export_results_csv,
+    export_performance_results_csv,
     plot_backend_performance,
     plot_error_weight_distribution,
     plot_logical_posteriors,
     plot_monte_carlo_convergence,
     plot_physical_vs_logical_rate,
     plot_syndrome_distribution,
+    performance_results_to_rows,
     results_to_dataframe,
     results_to_rows,
 )
@@ -169,6 +172,31 @@ def test_backend_plot_includes_total_cold_and_warm_runtime() -> None:
     assert len(runtime_axis.lines) == 3
 
 
+def test_backend_plot_and_export_include_gpu_phase_timings(tmp_path) -> None:
+    row = {
+        **_rate_row(0.1, 0.2, 100_000, 0.27, 0.27, backend="torch-cuda"),
+        "requested_backend": "gpu",
+        "device": "cuda:0",
+        "fallback_used": False,
+        "cold_start_runtime": 0.20,
+        "warm_runtime": 0.01,
+        "random_generation_runtime": 0.002,
+        "host_to_device_runtime": 0.0001,
+        "kernel_runtime": 0.004,
+        "reduction_runtime": 0.001,
+        "device_to_host_runtime": 0.0002,
+    }
+    axis = plot_backend_performance([row])
+    assert len(axis.figure.axes[1].lines) == 8
+    destination = export_performance_results_csv([row], tmp_path / "gpu.csv")
+    with destination.open(newline="", encoding="utf-8") as stream:
+        reader = csv.DictReader(stream)
+        exported = next(reader)
+    assert tuple(reader.fieldnames or ()) == PERFORMANCE_COLUMNS
+    assert exported["device"] == "cuda:0"
+    assert float(exported["kernel_runtime"]) == 0.004
+
+
 def test_csv_export_uses_documented_columns_and_full_values(tmp_path) -> None:
     rows = [_rate_row(0.123456789, 0.2, 12_345, 0.234567891, 0.23)]
     destination = export_results_csv(rows, tmp_path / "results.csv")
@@ -212,3 +240,31 @@ def test_plotting_does_not_modify_precomputed_numerical_results(monkeypatch) -> 
     plot_monte_carlo_convergence(rows)
     plot_backend_performance(rows)
     assert rows == original
+
+
+def test_performance_rows_and_plot_distinguish_cache_states() -> None:
+    cold = {
+        **_rate_row(0.1, 0.0, 100, 0.03, 0.028),
+        "cache_enabled": True,
+        "cache_hit": False,
+        "compilation_time": 0.001,
+        "planning_time": 0.0002,
+        "execution_time": 0.008,
+        "total_time": 0.0092,
+    }
+    warm = {
+        **_rate_row(0.1, 0.0, 100, 0.03, 0.028),
+        "cache_enabled": True,
+        "cache_hit": True,
+        "compilation_time": 0.0,
+        "planning_time": 0.00005,
+        "execution_time": 0.0079,
+        "total_time": 0.008,
+    }
+    exported = performance_results_to_rows([cold, warm])
+    assert exported[0]["cache_hit"] is False
+    assert exported[1]["cache_hit"] is True
+    axis = plot_backend_performance([cold, warm])
+    labels = tuple(label.get_text() for label in axis.get_xticklabels())
+    assert "cold cache" in labels[0]
+    assert "warm cache" in labels[1]

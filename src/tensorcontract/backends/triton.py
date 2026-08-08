@@ -37,6 +37,19 @@ class KernelSelection:
     reason: str
 
 
+@dataclass(frozen=True, slots=True)
+class FusedQECLaunch:
+    """Counters and inspectable launch metadata from fused QEC execution."""
+
+    logical_failures: torch.Tensor
+    physical_error_bits: torch.Tensor
+    kernel_count: int
+    registers_per_thread: int | None
+    register_spills: int | None
+    shared_memory_bytes: int | None
+    occupancy: float | None
+
+
 @triton_runtime.jit
 def _batched_matmul_kernel(
     left_pointer,
@@ -102,6 +115,51 @@ def _batched_matmul_kernel(
     )
     output_mask = (offsets_m[:, None] < size_m) & (offsets_n[None, :] < size_n)
     tl.store(output_pointer + output_offsets, accumulator, mask=output_mask)
+
+
+@triton_runtime.jit
+def _three_qubit_qec_trajectory_kernel(
+    logical_failure_counter,
+    physical_error_counter,
+    number_of_shots,
+    base_shot,
+    seed,
+    local_probability,
+    correlated_probability,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """Fuse RNG, repetition-code decoding, and block reduction."""
+    offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    active = offsets < number_of_shots
+    global_shots = base_shot + offsets
+    random_offsets = global_shots * 4
+    correlated = tl.rand(seed, random_offsets) < correlated_probability
+    local_1 = tl.rand(seed, random_offsets + 1) < local_probability
+    local_2 = tl.rand(seed, random_offsets + 2) < local_probability
+    local_3 = tl.rand(seed, random_offsets + 3) < local_probability
+
+    error_1 = correlated != local_1
+    error_2 = correlated != local_2
+    error_3 = correlated != local_3
+    syndrome_1 = error_1 != error_2
+    syndrome_2 = error_2 != error_3
+
+    # Recovery table: 10 -> q1, 11 -> q2, 01 -> q3, 00 -> identity.
+    recovery_1 = syndrome_1 & (syndrome_2 == 0)
+    recovery_2 = syndrome_1 & syndrome_2
+    recovery_3 = (syndrome_1 == 0) & syndrome_2
+    residual_1 = error_1 != recovery_1
+    residual_2 = error_2 != recovery_2
+    residual_3 = error_3 != recovery_3
+    logical_failure = residual_1 & residual_2 & residual_3
+
+    logical_count = tl.sum(tl.where(active & logical_failure, 1, 0), axis=0)
+    physical_count = tl.sum(
+        tl.where(active, error_1.to(tl.int32) + error_2.to(tl.int32) + error_3.to(tl.int32), 0),
+        axis=0,
+    )
+    tl.atomic_add(logical_failure_counter, logical_count)
+    tl.atomic_add(physical_error_counter, physical_count)
 
 
 class TritonBackend(TorchBackend):
@@ -264,3 +322,103 @@ class TritonBackend(TorchBackend):
             num_stages=2,
         )
         return output
+
+    @staticmethod
+    def _qec_launch_metadata(
+        device: torch.device,
+    ) -> tuple[int | None, int | None, int | None, float | None]:
+        """Read public-ish Triton metadata, returning unknowns conservatively."""
+        try:
+            device_index = torch.cuda.current_device() if device.index is None else device.index
+            compiled_entries = _three_qubit_qec_trajectory_kernel.cache[device_index]
+            compiled = next(reversed(compiled_entries.values()))
+            registers = int(compiled.n_regs)
+            spills = int(compiled.n_spills)
+            metadata = compiled.metadata
+            shared = int(metadata.shared)
+            threads_per_block = int(metadata.num_warps) * 32
+            properties = torch.cuda.get_device_properties(device_index)
+            register_blocks = properties.regs_per_multiprocessor // max(
+                1, registers * threads_per_block
+            )
+            thread_blocks = properties.max_threads_per_multi_processor // threads_per_block
+            active_threads = min(register_blocks, thread_blocks) * threads_per_block
+            occupancy = min(
+                1.0,
+                active_threads / properties.max_threads_per_multi_processor,
+            )
+            return registers, spills, shared, occupancy
+        except (AttributeError, IndexError, KeyError, StopIteration, TypeError, ValueError):
+            return None, None, None, None
+
+    @staticmethod
+    def launch_three_qubit_qec_trajectory(
+        *,
+        number_of_shots: int,
+        base_shot: int,
+        seed: int,
+        p: float,
+        rho: float,
+        device: torch.device,
+        block_size: int = 256,
+        counters: torch.Tensor | None = None,
+    ) -> FusedQECLaunch:
+        """Launch one fused correlated-noise trajectory kernel.
+
+        Only two scalar counters are written to global memory. Triton's normal
+        specialization cache owns the compiled binary; callers additionally
+        cache this selected schedule using their execution-plan key.
+        """
+        if device.type != "cuda":
+            raise ValueError("fused QEC trajectory requires a CUDA device")
+        if number_of_shots < 0 or base_shot < 0:
+            raise ValueError("shot counts and offsets must be nonnegative")
+        if block_size not in (64, 128, 256, 512):
+            raise ValueError("block_size must be one of 64, 128, 256, or 512")
+        if counters is None:
+            counters = torch.zeros(2, dtype=torch.int32, device=device)
+        elif (
+            counters.shape != (2,)
+            or counters.dtype != torch.int32
+            or counters.device.type != "cuda"
+            or (device.index is not None and counters.device.index != device.index)
+        ):
+            raise ValueError("fused QEC counters must be a two-element int32 CUDA tensor")
+        grid = (triton_runtime.cdiv(max(1, number_of_shots), block_size),)
+        _three_qubit_qec_trajectory_kernel[grid](
+            counters[0:1],
+            counters[1:2],
+            number_of_shots,
+            base_shot,
+            seed,
+            p,
+            rho,
+            BLOCK_SIZE=block_size,
+            num_warps=4,
+            num_stages=1,
+        )
+        registers, spills, shared, occupancy = TritonBackend._qec_launch_metadata(device)
+        return FusedQECLaunch(
+            counters[0], counters[1], 1, registers, spills, shared, occupancy
+        )
+
+    @classmethod
+    def prepare_three_qubit_qec_trajectory(
+        cls,
+        *,
+        device: torch.device,
+        block_size: int = 256,
+        number_of_shots: int = 65_536,
+    ) -> FusedQECLaunch:
+        """Compile/warm the fused specialization once for a cached plan."""
+        launch = cls.launch_three_qubit_qec_trajectory(
+            number_of_shots=max(1, number_of_shots),
+            base_shot=0,
+            seed=17,
+            p=0.25,
+            rho=0.25,
+            device=device,
+            block_size=block_size,
+        )
+        torch.cuda.synchronize(device)
+        return launch

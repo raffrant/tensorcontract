@@ -32,6 +32,34 @@ EXPORT_COLUMNS = (
     "shots_per_second",
 )
 
+PERFORMANCE_COLUMNS = EXPORT_COLUMNS + (
+    "requested_backend",
+    "device",
+    "fallback_used",
+    "cold_start_runtime",
+    "warm_runtime",
+    "random_generation_runtime",
+    "host_to_device_runtime",
+    "kernel_runtime",
+    "reduction_runtime",
+    "device_to_host_runtime",
+    "cache_hit",
+    "cache_enabled",
+    "compilation_time",
+    "planning_time",
+    "execution_time",
+    "total_time",
+    "plan_key",
+    "fusion_used",
+    "kernel_count",
+    "registers_per_thread",
+    "register_spills",
+    "shared_memory_bytes",
+    "occupancy",
+    "random_generation_fused",
+    "reduction_fused",
+)
+
 SYNDROME_LABELS = ("00", "01", "10", "11")
 
 
@@ -144,6 +172,35 @@ def export_results_csv(
     rows = results_to_rows(results)
     with destination.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=EXPORT_COLUMNS)
+        writer.writeheader()
+        writer.writerows(rows)
+    return destination
+
+
+def performance_results_to_rows(
+    results: Iterable[object],
+) -> tuple[dict[str, object], ...]:
+    """Normalize backend results including optional GPU phase timings."""
+    raw = tuple(results)
+    base_rows = results_to_rows(raw)
+    rows: list[dict[str, object]] = []
+    for result, base in zip(raw, base_rows):
+        extended = dict(base)
+        for column in PERFORMANCE_COLUMNS[len(EXPORT_COLUMNS):]:
+            extended[column] = _get(result, column, None)
+        rows.append({column: extended[column] for column in PERFORMANCE_COLUMNS})
+    return tuple(rows)
+
+
+def export_performance_results_csv(
+    results: Iterable[object],
+    path: str | Path,
+) -> Path:
+    """Export aggregate statistics plus optional accelerator timing phases."""
+    destination = Path(path)
+    rows = performance_results_to_rows(results)
+    with destination.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=PERFORMANCE_COLUMNS)
         writer.writeheader()
         writer.writerows(rows)
     return destination
@@ -354,11 +411,19 @@ def plot_backend_performance(results: Iterable[object], ax: Any = None) -> Any:
     """Plot throughput and available total/cold/warm runtime measurements."""
     axis = _axis(ax, figsize=(8.2, 4.6))
     raw = tuple(results)
-    rows = results_to_rows(raw)
+    rows = performance_results_to_rows(raw)
     if not rows:
         raise ValueError("backend-performance plot requires at least one result")
     x = np.arange(len(rows))
-    labels = [f"{row['backend']}\n{int(row['num_shots']):,} shots" for row in rows]
+    def cache_label(row: Mapping[str, object]) -> str:
+        if not bool(row.get("cache_enabled")):
+            return "uncached"
+        return "warm cache" if bool(row.get("cache_hit")) else "cold cache"
+
+    labels = [
+        f"{row['backend']} ({cache_label(row)})\n{int(row['num_shots']):,} shots"
+        for row in rows
+    ]
     throughput = [float(row["shots_per_second"]) for row in rows]
     bars = axis.bar(x, throughput, 0.62, label="Throughput")
     axis.set_xticks(x, labels)
@@ -378,8 +443,17 @@ def plot_backend_performance(results: Iterable[object], ax: Any = None) -> Any:
     for field, label, style in (
         ("cold_start_runtime", "Cold-start runtime", ":"),
         ("warm_runtime", "Warm runtime", "--"),
+        ("random_generation_runtime", "Random generation", "-."),
+        ("host_to_device_runtime", "Host-to-device", ":"),
+        ("kernel_runtime", "Vectorized kernels", "-"),
+        ("reduction_runtime", "Reduction", "--"),
+        ("device_to_host_runtime", "Device-to-host", "-."),
+        ("compilation_time", "Plan compilation", ":"),
+        ("planning_time", "Plan lookup/planning", "--"),
+        ("execution_time", "Execution", "-"),
+        ("total_time", "End-to-end total", "-."),
     ):
-        values = [_float_or_none(_get(item, field, None)) for item in raw]
+        values = [_float_or_none(row[field]) for row in rows]
         if any(value is not None for value in values):
             runtime_axis.plot(
                 x,

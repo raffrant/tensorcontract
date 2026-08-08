@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from time import perf_counter
 from typing import Literal
 
 import numpy as np
@@ -11,6 +13,7 @@ from numpy.typing import NDArray
 from tensorcontract.backends import NumPyBackend
 from tensorcontract.symbolics import (
     ContractionNode,
+    InMemoryPlanCache,
     IndexRole,
     SymbolicExecutionPlan,
     SymbolicGraph,
@@ -19,6 +22,8 @@ from tensorcontract.symbolics import (
     SymbolicTensor,
     plan_symbolic_contractions,
 )
+
+from .cache import QuantumExecutionPlanCache
 
 from .three_qubit import (
     ERROR_PATTERNS,
@@ -73,6 +78,10 @@ class CorrelatedNoiseTensorNetwork:
     output_name: str
     fixed_syndrome: Syndrome | None
     conditioning: SyndromeConditioning | None
+    cache_hit: bool = False
+    cache_enabled: bool = False
+    planning_time: float = 0.0
+    cache_key_digest: str | None = None
 
     @property
     def index_names(self) -> tuple[str, ...]:
@@ -169,6 +178,11 @@ def build_correlated_noise_tensor_network(
     fixed_syndrome: Syndrome | tuple[int, int] | None = None,
     conditioning: SyndromeConditioning = "selector",
     planner_options: SymbolicPlannerOptions | None = None,
+    plan_cache: QuantumExecutionPlanCache | InMemoryPlanCache | None = None,
+    cache_enabled: bool = True,
+    backend: str = "numpy",
+    fusion_options: Mapping[str, object] | None = None,
+    contraction_options: Mapping[str, object] | None = None,
 ) -> CorrelatedNoiseTensorNetwork:
     """Build and plan one exact correlated-noise symbolic tensor network.
 
@@ -285,7 +299,28 @@ def build_correlated_noise_tensor_network(
     if calculation == "logical_syndrome":
         bindings["logical_class"] = _logical_class_factor()
 
-    plan = plan_symbolic_contractions(graph, planner_options)
+    planning_started = perf_counter()
+    cache_result = None
+    cache_store = (
+        plan_cache.contraction
+        if isinstance(plan_cache, QuantumExecutionPlanCache)
+        else plan_cache
+    )
+    if cache_store is not None and cache_enabled:
+        cache_result = cache_store.get_or_plan(
+            graph,
+            bindings,
+            backend,
+            planner_options,
+            {
+                "fusion": dict(fusion_options or {}),
+                "contraction": dict(contraction_options or {}),
+            },
+        )
+        plan = cache_result.plan
+    else:
+        plan = plan_symbolic_contractions(graph, planner_options)
+    planning_time = perf_counter() - planning_started
     return CorrelatedNoiseTensorNetwork(
         graph,
         bindings,
@@ -294,6 +329,10 @@ def build_correlated_noise_tensor_network(
         "probabilities",
         measured,
         None if measured is None else conditioning,
+        False if cache_result is None else cache_result.hit,
+        False if cache_result is None else cache_result.cache_enabled,
+        planning_time,
+        None if cache_result is None else cache_result.key.digest,
     )
 
 

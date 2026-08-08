@@ -135,6 +135,30 @@ would not currently provide a safe compatibility guarantee. In-memory entries
 are deep-copied on storage and retrieval to prevent caller mutation from
 poisoning future cache hits.
 
+The three-qubit QEC workflow composes that cache with a backend-plan cache:
+
+```python
+from tensorcontract.quantum import QuantumExecutionPlanCache, run_monte_carlo
+
+cache = QuantumExecutionPlanCache(max_entries=32)
+cold = run_monte_carlo(
+    100_000, 0.10, 0.05, batch_size=65_536, plan_cache=cache
+)
+warm = run_monte_carlo(
+    100_000, 0.20, 0.15, batch_size=65_536, plan_cache=cache
+)
+print(cold.cache_hit, warm.cache_hit, cache.info())  # False, True, ...
+```
+
+Its stable backend key includes topology, tensor/batch shapes, index and noise
+model structure, dtype, requested backend, device, batch size, fusion options,
+and contraction options. The numerical values of `p` and `rho` remain runtime
+bindings and therefore do not force replanning. Incompatible signatures always
+miss. Pass `cache_enabled=False`, call `cache.set_enabled(False)`, inspect with
+`cache.inspect()`, or clear with `cache.clear()`. A failed GPU plan construction
+falls back to NumPy and is not cached, allowing a transient accelerator failure
+to recover on a later call.
+
 ## NumPy batched-matrix lowering
 
 The NumPy backend recognizes the exact symbolic pattern
@@ -215,6 +239,103 @@ The benchmark reports the Triton cold first call as a compilation upper bound
 because portable separation of compilation, allocation, and first launch is
 not available through this eager interface.
 
+## Optional GPU Monte Carlo
+
+The three-qubit correlated-noise example can process Monte Carlo batches with
+high-level PyTorch CUDA operations:
+
+```python
+from tensorcontract.quantum import is_gpu_available, run_monte_carlo
+
+print("CUDA available:", is_gpu_available())
+result = run_monte_carlo(
+    1_000_000,
+    p=0.17,
+    rho=0.23,
+    seed=7,
+    batch_size=262_144,
+    backend="gpu",
+)
+print(result.backend, result.device, result.fallback_used)
+```
+
+This is an eager, vectorized PyTorch implementation. It samples the shared and
+local variables on the GPU, then performs XOR, syndrome lookup, recovery,
+residual classification, and reductions over whole batches. It does not launch
+per shot or compile per shot. PyTorch remains optional;
+install it with `python3 -m pip install -e '.[torch]'`.
+
+An explicit optional fusion policy uses one Triton trajectory kernel per chunk:
+
+```python
+fused = run_monte_carlo(
+    1_000_000,
+    p=0.17,
+    rho=0.23,
+    seed=7,
+    batch_size=262_144,
+    backend="gpu",
+    fusion_options={"enabled": True, "block_size": 256},
+    plan_cache=cache,
+)
+print(fused.backend, fused.fusion_used, fused.kernel_count)
+```
+
+The kernel generates counter-based random values and computes errors,
+syndromes, recovery, residuals, logical failures, and block reductions in
+registers. It writes only two aggregate counters to global memory. Triton is
+optional (`python3 -m pip install -e '.[triton]'`), selection is never implicit,
+and unsupported schedules, missing Triton, sample-return requests, or kernel
+construction failures fall back to eager PyTorch CUDA. CUDA absence still
+falls back to NumPy. Fused RNG and reduction time are inseparable from kernel
+time and are explicitly marked by `random_generation_fused=True` and
+`reduction_fused=True` rather than being double-counted.
+
+Compiled specialization selection is retained by the Stage 6 plan key. Triton
+also owns its process-local binary cache. Numerical `p` and `rho` values remain
+runtime arguments. The current int32 aggregate counters limit fused execution
+to at most `(2**31-1)//3` shots per call; larger requests use eager CUDA.
+
+When CUDA is unavailable, a GPU request falls back to NumPy and explicitly
+reports `requested_backend="gpu"`, `backend="numpy"`, `device="cpu"`, and
+`fallback_used=True`. Phase timings distinguish random generation,
+host-to-device setup, vectorized kernel operations, reduction, and
+device-to-host transfer. Full trajectory transfer occurs only when
+`return_samples=True`.
+
+Run the reproducible cold/warm benchmark with:
+
+```bash
+PYTHONPATH=src python3 benchmarks/benchmark_three_qubit_gpu.py
+PYTHONPATH=src python3 benchmarks/benchmark_quantum_plan_cache.py
+PYTHONPATH=src python3 benchmarks/benchmark_three_qubit_fused_gpu.py
+```
+
+Benchmark/export rows include `cache_hit`, `compilation_time`, `planning_time`,
+`execution_time`, and `total_time`. The backend-performance plot labels cold
+cache, warm cache, and uncached executions separately.
+
+The CUDA path was validated on an NVIDIA GeForce RTX 4060 Laptop GPU with
+PyTorch 2.4.1. Warm NumPy/GPU runtime ratios were 0.172x at 1,000 shots, 0.829x
+at 10,000 shots, 7.448x at 100,000 shots, and 21.071x at 1,000,000 shots. Thus
+GPU overhead dominated both small workloads, while the GPU was faster for the
+two larger measured workloads. These are local results for one device,
+software stack, seed, and batch size—not a general GPU speedup claim. The
+1,000-shot GPU cold start was 0.272 seconds versus a 0.00105-second warm run.
+
+On the same RTX 4060 Laptop GPU with Triton 3.0.0, the fused kernel used 40
+registers/thread, reported 2 spills and 16 bytes of shared memory, with a 100%
+register/thread-limit occupancy estimate. Its first 1,000-shot run took 0.376 s
+including compilation, so fusion is inappropriate for one-off small jobs. Warm
+total times for 1K/10K/100K/1M shots were respectively 0.512/0.406/0.386/0.697
+ms, versus eager CUDA at 1.230/0.940/1.246/2.845 ms in this run. NumPy remained
+faster at 1K shots (0.282 ms), while fused CUDA was fastest at 10K and above.
+These are local measurements, include complete workflow costs, and do not imply
+a general speedup on other GPUs, software versions, seeds, or batch sizes.
+Generated PTX inspection for the measured specialization found two global
+atomic operations and no ordinary global or local loads/stores; aggregate
+counters are the only explicit trajectory outputs.
+
 ## Implemented
 
 - Typed named-index/hyperedge IR and tensor kinds for dense, diagonal, sparse,
@@ -226,6 +347,11 @@ not available through this eager interface.
   `matmul`, with an explicit opt-out and safe `einsum` fallback.
 - Optional, policy-controlled Triton kernel for that same batched contraction,
   with an inspectable PyTorch fallback for unsupported inputs.
+- Vectorized NumPy and optional high-level PyTorch CUDA Monte Carlo for the
+  exact three-qubit correlated-XXX example, with explicit fallback and phase
+  timings.
+- Explicit, cached Triton fusion for aggregate three-qubit Monte Carlo, with
+  eager CUDA fallback and register/shared-memory diagnostics when available.
 - Conservative scalar-folding, identity-elimination, and degree-one-absorption
   rewrites, each with preconditions and before/after storage estimates.
 - Deterministic FLOP-, memory-, and balanced-greedy candidates; combined
